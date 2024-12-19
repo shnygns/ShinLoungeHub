@@ -143,8 +143,11 @@ COMMANDS
 The config.py file houses the bot token (as a string between quotes), and the list of terms for which a user will be banned if the term appears in his display name. The finished config file should look something like this:
 
 """ BASIC CREDENTIALS """
+
 \# BASIC CREDENTIALS - BOT TOKEN
+
 \# Gotten from Telegram BotFather
+
 BOT_TOKEN = "XXXXXXXXXXXXXX"  # from BotFather
 
 ## License
