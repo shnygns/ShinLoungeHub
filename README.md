@@ -134,7 +134,9 @@ You will clone this hub to the same area, and it will create a new, shared datab
 You don't need to do anything other that install the hub to the same folder area as your Shin Lounges. The lounges will send updates to the shared database if it exists. The Lounges can also operate on their own without a hib.
 
 COMMANDS
+
 /start - List active Shin Lounge bots
+
 /help - Tells you to use the fucking /start command, you moron.
 
 
