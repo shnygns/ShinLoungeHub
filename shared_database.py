@@ -247,20 +247,18 @@ class SharedDatabase(object):
                         raise Exception("Error updating lounge name")
                 query = """
                     INSERT INTO users (user_id, full_name, username, current_active_lounge, last_seen)
-                    VALUES (?, ?, ?, 
-                        CASE 
-                            WHEN COALESCE((SELECT current_active_lounge FROM users WHERE user_id = ?), '') != '*' 
-                            THEN ? 
-                            ELSE COALESCE((SELECT current_active_lounge FROM users WHERE user_id = ?), '') 
-                        END, 
-                        ?)
+                    VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT(user_id) DO UPDATE SET
                         full_name=excluded.full_name,
                         username=excluded.username,
-                        current_active_lounge=excluded.current_active_lounge,
+                        current_active_lounge=CASE 
+                            WHEN users.current_active_lounge IS NULL 
+                            THEN excluded.current_active_lounge 
+                            ELSE users.current_active_lounge 
+                        END,
                         last_seen=excluded.last_seen
                     """
-                params = (user_id, full_name, username, user_id, bot_token, user_id, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f"))
+                params = (user_id, full_name, username, bot_token, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f"))
                 success = self._execute(query, params)
                 if success:
                     self._commit()
@@ -275,7 +273,10 @@ class SharedDatabase(object):
         # Set the user's current_active_lounge to NULL
         query = """
                 UPDATE users
-                SET current_active_lounge = NULL
+                SET current_active_lounge = CASE
+                    WHEN current_active_lounge != '*' THEN NULL
+                    ELSE current_active_lounge
+                END
                 WHERE user_id = ?
                 """
         params = (user_id,)
@@ -444,6 +445,22 @@ class SharedDatabase(object):
             return current_lounge[0] if current_lounge else None
         else:
             raise Exception("Error getting user's current lounge")
+        
+    
+    #return lounges.name of the current_active_lounge for a given user id
+    def get_user_current_lounge_name(self, user_id) -> str:
+        query = """
+                SELECT lounges.name FROM users
+                JOIN lounges ON users.current_active_lounge = lounges.bot_token
+                WHERE user_id = ?
+                """
+        params = (user_id,)
+        success = self._execute(query, params)
+        if success:
+            current_lounge_name = self.cur.fetchone()
+            return current_lounge_name[0] if current_lounge_name else None
+        else:
+            raise Exception("Error getting user's current lounge name")
 
 
     async def timed_updates(self, context):

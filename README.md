@@ -116,20 +116,27 @@ To run your Telegram bot, you'll need a Bot Token from the Telegram BotFather. F
 Here's how this works. Let's say that you put your Shin Lounges off of your home folder, like so:
 
 ~/ShinLounge1/
+
 ~/ShinLounge2/
+
 etc...
 
 You will clone this hub to the same area, and it will create a new, shared database one level higher than the clone folder. Your file/folder structure will now look like this:
 
 ~/ShinLounge_hub.db
+
 ~/ShinLounge1/
+
 ~/ShinLounge2/
+
 ~/ShinLoungeHub/
 
 You don't need to do anything other that install the hub to the same folder area as your Shin Lounges. The lounges will send updates to the shared database if it exists. The Lounges can also operate on their own without a hib.
 
 COMMANDS
+
 /start - List active Shin Lounge bots
+
 /help - Tells you to use the fucking /start command, you moron.
 
 
@@ -138,8 +145,11 @@ COMMANDS
 The config.py file houses the bot token (as a string between quotes), and the list of terms for which a user will be banned if the term appears in his display name. The finished config file should look something like this:
 
 """ BASIC CREDENTIALS """
-# BASIC CREDENTIALS - BOT TOKEN
-# Gotten from Telegram BotFather
+
+\# BASIC CREDENTIALS - BOT TOKEN
+
+\# Gotten from Telegram BotFather
+
 BOT_TOKEN = "XXXXXXXXXXXXXX"  # from BotFather
 
 ## License
