@@ -1,4 +1,5 @@
 import sqlite3
+import time
 import logging
 from  threading import RLock
 from datetime import datetime, timedelta, timezone
@@ -101,27 +102,24 @@ class SharedDatabase(object):
             logging.error(f"Database error: {e}")
 
 
-    def _execute(self, query, params=None):
-        """Execute a row of data to current cursor with detailed error handling."""
-        try:
-            with self.lock:
-                if params is None:
-                    self.cur.execute(query)
+    def _execute(self, query, params=None, retries=5, delay=1):
+        """Execute a query with retry mechanism for handling database locks."""
+        for attempt in range(retries):
+            try:
+                with self.lock:
+                    if params is None:
+                        self.cur.execute(query)
+                    else:
+                        self.cur.execute(query, params)
+                    return True
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e).lower():
+                    logging.warning(f"Database is locked, retrying in {delay} seconds... (attempt {attempt + 1}/{retries})")
+                    time.sleep(delay)
                 else:
-                    self.cur.execute(query, params)
-                return True
-        except sqlite3.Error as e:
-            logging.error(f"Database error during execute: {e} - Query: {query}")
-            # You could optionally include more information about the error
-            error_info = {
-                'error': str(e),
-                'query': query,
-                'params': params
-            }
-            # Consider throwing a custom exception or return error information
-            raise Exception(f"Database operation failed: {error_info}")
-            # Alternatively, you can return False and error details
-            # return False, error_info
+                    logging.error(f"Database error during execute: {e} - Query: {query} - Params: {params}")
+                    raise Exception(f"Database operation failed: {e}")
+        raise Exception(f"Database operation failed after {retries} retries: database is locked")
 
 
     def _commit(self):
