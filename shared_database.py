@@ -22,7 +22,7 @@ class SharedDatabase(object):
             self.lock = RLock()
             self.connection = sqlite3.connect(SharedDatabase.DB_LOCATION, check_same_thread=False)
             self.connection.row_factory = sqlite3.Row
-            self.cur = self.connection.cursor()
+            # self.cur = self.connection.cursor()
 
             self._ensure_schema()
         except sqlite3.Error as e:
@@ -54,8 +54,9 @@ class SharedDatabase(object):
 
 
     def _ensure_schema(self):
-        """create a database table if it does not exist already"""
-        self.cur.execute("""
+        """Create database tables if they do not exist already."""
+        schema_queries = [
+            """
             CREATE TABLE IF NOT EXISTS lounges (
                 id INTEGER PRIMARY KEY,
                 name TEXT,
@@ -64,10 +65,8 @@ class SharedDatabase(object):
                 active_user_count INTEGER DEFAULT 0,
                 last_updated TIMESTAMP
             )
-        """
-        )
-
-        self.cur.execute("""
+            """,
+            """
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 full_name TEXT,
@@ -77,19 +76,27 @@ class SharedDatabase(object):
                 universal_ban BOOLEAN DEFAULT FALSE,
                 FOREIGN KEY(current_active_lounge) REFERENCES lounges(bot_token)
             )
-        """
-        )
-
-
-        self.cur.execute("""
+            """,
+            """
             CREATE TABLE IF NOT EXISTS settings (
                 setting TEXT PRIMARY KEY,
                 value VARCHAR(255)
             )
-        """
-        )
-
-        self._commit()
+            """
+        ]
+        with self.lock:
+            cur = None
+            try:
+                cur = self.connection.cursor()  # Explicitly create the cursor
+                for query in schema_queries:
+                    cur.execute(query)
+                self.connection.commit()  # Commit the changes
+            except sqlite3.Error as e:
+                logging.error(f"Error while ensuring schema: {e}")
+                raise e
+            finally:
+                if cur:
+                    cur.close()  # Ensure the cursor is closed even if an error occurs
 
 
     def _close(self):
@@ -107,11 +114,13 @@ class SharedDatabase(object):
         for attempt in range(retries):
             try:
                 with self.lock:
+                    cur = self.connection.cursor()  # Create a new cursor for this operation
                     if params is None:
-                        self.cur.execute(query)
+                        cur.execute(query)
                     else:
-                        self.cur.execute(query, params)
-                    return True
+                        cur.execute(query, params)
+                    self.connection.commit()  # Ensure changes are committed
+                    return cur.fetchall() # Return results if applicable
             except sqlite3.OperationalError as e:
                 if "database is locked" in str(e).lower():
                     logging.warning(f"Database is locked, retrying in {delay} seconds... (attempt {attempt + 1}/{retries})")
@@ -137,13 +146,13 @@ class SharedDatabase(object):
                 WHERE last_updated < ?
                 """
         params = (datetime.now(timezone.utc) - timedelta(days=1),)
-        success = self._execute(query, params)
-        if success:
-            self._commit()
-        else:
-            raise Exception("Error setting inactive lounges")
-        return success
-    
+        try:
+            self._execute(query, params)  # No need to check success; exceptions handle failure
+            return True
+        except Exception as e:
+            logging.error(f"Error setting inactive lounges: {e}")
+            return False
+        
 
     #Loop through all lounges and update the active_user_count to the number of users who have an active status in the users table
     def _update_active_user_count(self) -> bool:
@@ -155,12 +164,12 @@ class SharedDatabase(object):
                     WHERE current_active_lounge = lounges.bot_token
                     )
                 """
-        success = self._execute(query)
-        if success:
-            self._commit()
-        else:
-            raise Exception("Error updating active user count")
-        return success  
+        try:
+            self._execute(query)  # No need to check success; exceptions handle failure
+            return True
+        except Exception as e:
+            logging.error(f"Error setting inactive lounges: {e}")
+            return False
     
 
 
@@ -171,12 +180,12 @@ class SharedDatabase(object):
                 VALUES (?, ?, ?, ?)
                 """
         params =  (name, bot_token, status, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f"))
-        success = self._execute(query, params)
-        if success:
-            self._commit()
-        else:
-            raise Exception("Error recording lounge")
-        return success
+        try:
+            self._execute(query, params)  # No need to check success; exceptions handle failure
+            return True
+        except Exception as e:
+            logging.error(f"Error setting inactive lounges: {e}")
+            return False
     
     #ping lounge using bot token
     def _lounge_activity_update(self, bot_token) -> bool:
@@ -187,50 +196,54 @@ class SharedDatabase(object):
                 WHERE bot_token = ?
                 """
         params = (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f"), bot_token)
-        success = self._execute(query, params)
-        if success:
-            self._commit()
-        else:
-            raise Exception("Error pinging lounge")
-        return success
+        try:
+            self._execute(query, params)  # No need to check success; exceptions handle failure
+            return True
+        except Exception as e:
+            logging.error(f"Error setting inactive lounges: {e}")
+            return False
     
 
         # If lounge is already represented by bot token, update last active, or else record lounge
     def _record_lounge_or_ping(self, name, bot_token) -> bool:
-        """record lounge in database"""
+        """Record lounge in database or update its activity."""
         query = """
                 SELECT * FROM lounges
                 WHERE bot_token = ?
                 """
         params = (bot_token,)
-        success = self._execute(query, params)
-        if success:
-            lounge = self.cur.fetchone()
+        try:
+            result = self._execute(query, params)
+            lounge = result[0] if result else None
             if lounge:
                 return self._lounge_activity_update(bot_token)
             else:
                 return self._record_lounge(name, bot_token, status=LoungeStatus.ACTIVE.value)
-        else:
-            raise Exception("Error recording lounge or pinging lounge")
+        except Exception as e:
+            logging.error(f"Error recording or pinging lounge: {e}")
+            return False
         
 
     def update_user(self, user_id, full_name, username, lounge_name, bot_token, currently_joined=True) -> bool:
-        """add or update user in database using bot token"""
+        """Add or update user in the database using bot token."""
         if self.is_user_banned(user_id):
             return False
+
         query = """
                 SELECT id FROM lounges
                 WHERE bot_token = ?
                 """
         params = (bot_token,)
-        success = self._execute(query, params)
-        if success:
-            lounge_id = self.cur.fetchone()
+        try:
+            result = self._execute(query, params)
+            lounge_id = result[0]["id"] if result else None
+
             if lounge_id is None:
                 self._record_lounge(lounge_name, bot_token, status=LoungeStatus.ACTIVE.value)
                 lounge_id = self.get_lounge(bot_token)["id"]
             else:
-                current_lounge_name = self.get_lounge(bot_token)["name"]
+                current_lounge = self.get_lounge(bot_token)
+                current_lounge_name = current_lounge["name"] if current_lounge else None
                 if current_lounge_name != lounge_name:
                     query = """
                             UPDATE lounges
@@ -238,34 +251,29 @@ class SharedDatabase(object):
                             WHERE bot_token = ?
                             """
                     params = (lounge_name, bot_token)
-                    success = self._execute(query, params)
-                    if success:
-                        self._commit()
-                    else:
-                        raise Exception("Error updating lounge name")
-                query = """
-                    INSERT INTO users (user_id, full_name, username, current_active_lounge, last_seen)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(user_id) DO UPDATE SET
-                        full_name=excluded.full_name,
-                        username=excluded.username,
-                        current_active_lounge=CASE 
-                            WHEN users.current_active_lounge IS NULL 
-                            THEN excluded.current_active_lounge 
-                            ELSE users.current_active_lounge 
-                        END,
-                        last_seen=excluded.last_seen
-                    """
-                params = (user_id, full_name, username, bot_token, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f"))
-                success = self._execute(query, params)
-                if success:
-                    self._commit()
-                    self._lounge_activity_update(bot_token)
-                    return success
+                    self._execute(query, params)
 
-        else:
-            raise Exception("Error updating user")
-
+            query = """
+                INSERT INTO users (user_id, full_name, username, current_active_lounge, last_seen)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    full_name=excluded.full_name,
+                    username=excluded.username,
+                    current_active_lounge=CASE 
+                        WHEN users.current_active_lounge IS NULL 
+                        THEN excluded.current_active_lounge 
+                        ELSE users.current_active_lounge 
+                    END,
+                    last_seen=excluded.last_seen
+            """
+            params = (user_id, full_name, username, bot_token, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f"))
+            self._execute(query, params)
+            self._lounge_activity_update(bot_token)
+            return True
+        except Exception as e:
+            logging.error(f"Error updating user: {e}")
+            return False
+       
 
     def user_left_chat(self, user_id) -> bool:
         # Set the user's current_active_lounge to NULL
@@ -278,28 +286,28 @@ class SharedDatabase(object):
                 WHERE user_id = ?
                 """
         params = (user_id,)
-        success = self._execute(query, params)
-        if success:
-            self._commit()
-        else:
-            raise Exception("Error updating user")
-        return success
+        try:
+            self._execute(query, params)  # No need to check success; exceptions handle failure
+            return True
+        except Exception as e:
+            logging.error(f"Error setting inactive lounges: {e}")
+            return False
     
     
     def get_active_lounges(self) -> List[dict]:
-        """return all active lounges in database"""
+        """Return all active lounges in the database."""
         query = """
                 SELECT * FROM lounges
                 WHERE status = 1
                 """
-
-        success = self._execute(query)
-        if success:
-            #combine table column names with fatchall results to make a list of dictionaries
-            lounges = [dict(lounge) for lounge in self.cur.fetchall()]
+        try:
+            result = self._execute(query)
+            lounges = [dict(lounge) for lounge in result] if result else []
             return lounges
-        else:
-            raise Exception("Error returning all active lounges")
+        except Exception as e:
+            logging.error(f"Error retrieving active lounges: {e}")
+            raise e
+
         
     def get_active_users(self) -> List[dict]:
         """return all active users in a lounge"""
@@ -307,44 +315,42 @@ class SharedDatabase(object):
                 SELECT * FROM users
                 WHERE current_active_lounge IS NOT NULL
                 """
-        success = self._execute(query)
-        if success:
-            #combine table column names with fatchall results to make a list of dictionaries
-            users = [dict(user) for user in self.cur.fetchall()]
+        try:
+            result = self._execute(query)
+            users = [dict(user) for user in result] if result else []
             return users
-        else:
+        except:
             raise Exception("Error returning all active users")
         
-
+        
     def get_lounge_active_user_count(self, bot_token) -> int:
-        """return active user count for a lounge"""
+        """Return the active user count for a lounge."""
         query = """
                 SELECT active_user_count FROM lounges
                 WHERE bot_token = ?
                 """
         params = (bot_token,)
-        success = self._execute(query, params)
-        if success:
-            active_user_count = self.cur.fetchone()
-            return active_user_count[0] if active_user_count else 0
-        else:
-            raise Exception("Error returning active user count")
+        try:
+            result = self._execute(query, params)
+            return result[0]["active_user_count"] if result else 0
+        except Exception as e:
+            logging.error(f"Error retrieving active user count: {e}")
+            raise Exception("Error returning active user count for a lounge")
 
 
     def get_lounge(self, bot_token) -> dict:
-        """return lounge from database"""
+        """Return lounge from database."""
         query = """
                 SELECT * FROM lounges
                 WHERE bot_token = ?
                 """
         params = (bot_token,)
-        success = self._execute(query, params)
-        if success:
-            self.cur.row_factory = sqlite3.Row  # Set the row factory to sqlite3.Row
-            lounge = self.cur.fetchone()
-            return dict(lounge) if lounge else None
-        else:
-            raise Exception("Error returning lounge")
+        try:
+            result = self._execute(query, params)
+            return dict(result[0]) if result else None
+        except Exception as e:
+            logging.error(f"Error returning lounge from database: {e}")
+            raise Exception("Error returning lounge from database")
         
 
     def universal_ban_user(self, user_id) -> bool:
@@ -355,24 +361,24 @@ class SharedDatabase(object):
                 WHERE user_id = ?
                 """
         params = (user_id,)
-        success = self._execute(query, params)
-        if success:
-            self._commit()
-        else:
-            raise Exception("Error recording banned user")
-        return success
+        try:
+            self._execute(query, params)  # No need to check success; exceptions handle failure
+            return True
+        except Exception as e:
+            logging.error(f"Error setting inactive lounges: {e}")
+            return False
     
+
     def get_list_of_banned_users(self) -> List[int]:
         """return list of banned users"""
         query = """
                 SELECT user_id FROM users
                 WHERE universal_ban = TRUE
                 """
-        success = self._execute(query)
-        if success:
-            banned_users = self.cur.fetchall()
-            return [user[0] for user in banned_users]
-        else:
+        try:
+            result= self._execute(query)
+            return [user[0] for user in result] if result else []
+        except:
             raise Exception("Error returning list of banned users")
         
     
@@ -383,11 +389,10 @@ class SharedDatabase(object):
                 WHERE user_id = ?
                 """
         params = (user_id,)
-        success = self._execute(query, params)
-        if success:
-            banned = self.cur.fetchone()
-            return banned[0] if banned else False
-        else:
+        try:
+            result = self._execute(query, params)
+            return result[0]['universal_ban'] if result else False
+        except:
             raise Exception("Error checking if user is banned")
     
 
@@ -407,12 +412,12 @@ class SharedDatabase(object):
                 WHERE user_id = ?
                 """
         params = (user_id,)
-        success = self._execute(query, params)
-        if success:
-            self._commit()
-        else:
-            raise Exception("Error whitelisting user")
-        return success
+        try:
+            self._execute(query, params)  # No need to check success; exceptions handle failure
+            return True
+        except Exception as e:
+            logging.error(f"Error setting inactive lounges: {e}")
+            return False
     
 
     def dewhitelist_user(self, user_id) -> bool:
@@ -422,12 +427,12 @@ class SharedDatabase(object):
                 WHERE user_id = ?
                 """
         params = (user_id,)
-        success = self._execute(query, params)
-        if success:
-            self._commit()
-        else:
-            raise Exception("Error dewhitelisting user")
-        return success
+        try:
+            self._execute(query, params)  # No need to check success; exceptions handle failure
+            return True
+        except Exception as e:
+            logging.error(f"Error setting inactive lounges: {e}")
+            return False
     
 
     # Return user's currently active lounge
@@ -437,11 +442,10 @@ class SharedDatabase(object):
                 WHERE user_id = ?
                 """
         params = (user_id,)
-        success = self._execute(query, params)
-        if success:
-            current_lounge = self.cur.fetchone()
-            return current_lounge[0] if current_lounge else None
-        else:
+        try:
+            result = self._execute(query, params)
+            return result[0]['current_active_lounge'] if result else None
+        except:
             raise Exception("Error getting user's current lounge")
         
     
@@ -453,11 +457,10 @@ class SharedDatabase(object):
                 WHERE user_id = ?
                 """
         params = (user_id,)
-        success = self._execute(query, params)
-        if success:
-            current_lounge_name = self.cur.fetchone()
-            return current_lounge_name[0] if current_lounge_name else None
-        else:
+        try:
+            result = self._execute(query, params)
+            return result[0][0] if result else None
+        except:
             raise Exception("Error getting user's current lounge name")
 
 
