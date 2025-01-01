@@ -123,7 +123,7 @@ class SharedDatabase(object):
                     return cur.fetchall() # Return results if applicable
             except sqlite3.OperationalError as e:
                 if "database is locked" in str(e).lower():
-                    logging.warning(f"Database is locked, retrying in {delay} seconds... (attempt {attempt + 1}/{retries})")
+                    logging.debug(f"Database is locked, retrying in {delay} seconds... (attempt {attempt + 1}/{retries})")
                     time.sleep(delay)
                 else:
                     logging.error(f"Database error during execute: {e} - Query: {query} - Params: {params}")
