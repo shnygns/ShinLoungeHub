@@ -109,7 +109,7 @@ class SharedDatabase(object):
             logging.error(f"Database error: {e}")
 
 
-    def _execute(self, query, params=None, retries=5, delay=1):
+    def _execute(self, query, params=None, retries=10, delay=1):
         """Execute a query with retry mechanism for handling database locks."""
         for attempt in range(retries):
             try:
