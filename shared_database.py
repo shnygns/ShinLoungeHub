@@ -188,14 +188,22 @@ class SharedDatabase(object):
             return False
     
     #ping lounge using bot token
-    def _lounge_activity_update(self, bot_token) -> bool:
+    def _lounge_activity_update(self, bot_token, active_user_count = None) -> bool:
         """ping lounge to update last_updated timestamp"""
-        query = """
-                UPDATE lounges
-                SET status = 1, last_updated = ?
-                WHERE bot_token = ?
-                """
-        params = (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f"), bot_token)
+        if active_user_count is None or not isinstance(active_user_count, int):
+            query = """
+                    UPDATE lounges
+                    SET status = 1, last_updated = ?
+                    WHERE bot_token = ?
+                    """
+            params = (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f"), bot_token)
+        else:
+            query = """
+                    UPDATE lounges
+                    SET status = 1, active_user_count = ?, last_updated = ?
+                    WHERE bot_token = ?
+                    """
+            params = (active_user_count, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f"), bot_token)
         try:
             self._execute(query, params)  # No need to check success; exceptions handle failure
             return True
@@ -205,7 +213,7 @@ class SharedDatabase(object):
     
 
         # If lounge is already represented by bot token, update last active, or else record lounge
-    def _record_lounge_or_ping(self, name, bot_token) -> bool:
+    def _record_lounge_or_ping(self, name, bot_token, active_user_count = None) -> bool:
         """Record lounge in database or update its activity."""
         query = """
                 SELECT * FROM lounges
@@ -216,7 +224,7 @@ class SharedDatabase(object):
             result = self._execute(query, params)
             lounge = result[0] if result else None
             if lounge:
-                return self._lounge_activity_update(bot_token)
+                return self._lounge_activity_update(bot_token, active_user_count)
             else:
                 return self._record_lounge(name, bot_token, status=LoungeStatus.ACTIVE.value)
         except Exception as e:
@@ -363,6 +371,7 @@ class SharedDatabase(object):
         params = (user_id,)
         try:
             self._execute(query, params)  # No need to check success; exceptions handle failure
+            logging.info(f"User {user_id} has been banned.")
             return True
         except Exception as e:
             logging.error(f"Error setting inactive lounges: {e}")
@@ -396,9 +405,9 @@ class SharedDatabase(object):
             raise Exception("Error checking if user is banned")
     
 
-    def ping(self, name, bot_token) -> bool:
+    def ping(self, name, bot_token, active_user_count = None) -> bool:
         try:
-            self._record_lounge_or_ping(name, bot_token)
+            self._record_lounge_or_ping(name, bot_token, active_user_count)
             return True
         except Exception as e:
             logging.error(f"Error pinging lounge: {e}")
@@ -468,6 +477,6 @@ class SharedDatabase(object):
         """run timed updates"""
         try:
             self._set_inactive_lounges()
-            self._update_active_user_count()
+            # self._update_active_user_count()
         except Exception as e:
             logging.error(f"Error running timed updates: {e}")
